@@ -214,11 +214,13 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 	var trns []byte
 	var data []byte
 	for {
-		n, err := readInt(f)
+		// Fix error when png not embed profile
+		// https://github.com/signintech/gopdf/commit/1b7ea99017dbed0067d9c1c063968c50bc968ad8
+		un, err := readUInt(f)
 		if err != nil {
 			return err
 		}
-
+		n := int(un)
 		typ, err := readBytes(f, 4)
 		//fmt.Printf(">>>>>%s\n", string(typ))
 		if err != nil {
