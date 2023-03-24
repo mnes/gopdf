@@ -286,7 +286,88 @@ func (gp *GoPdf) ImageByReader(o string, r io.Reader, x float64, y float64, rect
 			if err != nil {
 				return err
 			}
+			dRGB.getRoot = func() *GoPdf {
+				return gp
+			}
 			imgobj.imginfo.deviceRGBObjID = gp.addObj(dRGB)
+		}
+
+	} else { //same img
+		gp.getContent().AppendStreamImage(cacheImageIndex, x, y, rect)
+	}
+	return nil
+}
+
+func (gp *GoPdf) ImageByReaderFunc(o string, funcGetReader func() (io.Reader, error), x float64, y float64, rect *Rect) error {
+
+	//check
+	cacheImageIndex := -1
+	for _, imgcache := range gp.curr.ImgCaches {
+		if o == imgcache.Path {
+			cacheImageIndex = imgcache.Index
+			break
+		}
+	}
+
+	//create img object
+	readerObj := new(ImageReaderObj)
+	readerObj.init(func() *GoPdf {
+		return gp
+	})
+	readerObj.setProtection(gp.protection())
+	readerObj.setImageReader(funcGetReader)
+
+	imgobj := new(ImageObj)
+	imgobj.setProtection(gp.protection())
+
+	reader, err := funcGetReader()
+	if err != nil {
+		return err
+	}
+	if err := imgobj.SetImage(reader); err != nil {
+		return err
+	}
+
+	if rect == nil {
+		rect = imgobj.GetRect()
+	}
+
+	if cacheImageIndex == -1 { //new image
+		err := imgobj.parse()
+		if err != nil {
+			return err
+		}
+		index := gp.addObj(readerObj)
+		if gp.indexOfProcSet != -1 {
+			//ยัดรูป
+			procset := gp.pdfObjs[gp.indexOfProcSet].(*ProcSetObj)
+			gp.getContent().AppendStreamImage(gp.curr.CountOfImg, x, y, rect)
+			procset.RealteXobjs = append(procset.RealteXobjs, RealteXobject{IndexOfObj: index})
+			//เก็บข้อมูลรูปเอาไว้
+			var imgcache ImageCache
+			imgcache.Index = gp.curr.CountOfImg
+			imgcache.Path = o
+			gp.curr.ImgCaches = append(gp.curr.ImgCaches, imgcache)
+			gp.curr.CountOfImg++
+		}
+
+		if imgobj.haveSMask() {
+			smaskObj, err := imgobj.createSMask()
+			if err != nil {
+				return err
+			}
+			readerObj.smarkObjID = gp.addObj(smaskObj)
+		}
+
+		if imgobj.isColspaceIndexed() {
+			dRGB, err := imgobj.createDeviceRGB()
+			if err != nil {
+				return err
+			}
+			dRGB.getRoot = func() *GoPdf {
+				return gp
+			}
+			readerObj.deviceRGBObjID = gp.addObj(dRGB)
 		}
 
 	} else { //same img
