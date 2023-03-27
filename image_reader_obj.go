@@ -3,7 +3,6 @@ package gopdf
 import (
 	"bytes"
 	"fmt"
-	"image"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
@@ -95,25 +94,6 @@ func (i *ImageReaderObj) haveSMask() bool {
 	return haveSMask(i.imginfo)
 }
 
-func (i *ImageReaderObj) createSMask() (*SMask, error) {
-	var smk SMask
-	smk.setProtection(i.protection())
-	smk.w = i.imginfo.w
-	smk.h = i.imginfo.h
-	smk.colspace = "DeviceGray"
-	smk.bitsPerComponent = "8"
-	smk.filter = i.imginfo.filter
-	smk.data = i.imginfo.smask
-	smk.decodeParms = fmt.Sprintf("/Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns %d", i.imginfo.w)
-	return &smk, nil
-}
-
-func (i *ImageReaderObj) createDeviceRGB() (*DeviceRGBObj, error) {
-	var dRGB DeviceRGBObj
-	dRGB.data = i.imginfo.pal
-	return &dRGB, nil
-}
-
 func (i *ImageReaderObj) getType() string {
 	return "Image"
 }
@@ -122,41 +102,8 @@ func (i *ImageReaderObj) getObjBuff() *bytes.Buffer {
 	return &(i.buffer)
 }
 
-//GetRect get rect of img
-func (i *ImageReaderObj) GetRect() *Rect {
-
-	m, _, err := image.Decode(bytes.NewBuffer(i.raw))
-	if err != nil {
-		return nil
-	}
-
-	imageRect := m.Bounds()
-	k := 1
-	w := -128 //init
-	h := -128 //init
-	if w < 0 {
-		w = -imageRect.Dx() * 72 / w / k
-	}
-	if h < 0 {
-		h = -imageRect.Dy() * 72 / h / k
-	}
-	if w == 0 {
-		w = h * imageRect.Dx() / imageRect.Dy()
-	}
-	if h == 0 {
-		h = w * imageRect.Dy() / imageRect.Dx()
-	}
-
-	var rect = new(Rect)
-	rect.H = float64(h)
-	rect.W = float64(w)
-
-	return rect
-}
-
 func (i *ImageReaderObj) parse() error {
-
-	imginfo, err := parseImg(i.raw)
+	imginfo, err := parseImg(bytes.NewReader(i.raw))
 	if err != nil {
 		return err
 	}

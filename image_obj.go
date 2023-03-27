@@ -158,7 +158,7 @@ func (i *ImageObj) GetRect() *Rect {
 
 func (i *ImageObj) parse() error {
 
-	imginfo, err := parseImg(i.raw)
+	imginfo, err := parseImg(bytes.NewReader(i.raw))
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package gopdf
 
 import (
+	"bytes"
 	"io/ioutil"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestImagePares(t *testing.T) {
 		return
 	}
 
-	_, err = parseImg(data)
+	_, err = parseImg(bytes.NewReader(data))
 	if err != nil {
 		t.Error(err)
 		return

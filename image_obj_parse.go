@@ -74,10 +74,11 @@ func haveSMask(imginfo imgInfo) bool {
 	return false
 }
 
-func parseImg(raw []byte) (imgInfo, error) {
-	//fmt.Printf("----------\n")
+func parseImg(raw *bytes.Reader) (imgInfo, error) {
+	// fmt.Printf("----------\n")
 	var info imgInfo
-	imgConfig, formatname, err := image.DecodeConfig(bytes.NewBuffer(raw))
+	raw.Seek(0, 0)
+	imgConfig, formatname, err := image.DecodeConfig(raw)
 	if err != nil {
 		return info, err
 	}
@@ -89,15 +90,20 @@ func parseImg(raw []byte) (imgInfo, error) {
 		if err != nil {
 			return info, err
 		}
-		info.data = raw
+		raw.Seek(0, 0)
+		info.data, err = ioutil.ReadAll(raw)
+		if err != nil {
+			return info, err
+		}
+
 	} else if formatname == "png" {
-		err = paesePng(raw, &info, imgConfig)
+		err = parseImgPng(raw, &info, imgConfig)
 		if err != nil {
 			return info, err
 		}
 	}
 
-	//fmt.Printf("%#v\n", info)
+	// fmt.Printf("%#v\n", info)
 
 	return info, nil
 }
@@ -124,23 +130,23 @@ func parseImgJpg(info *imgInfo, imgConfig image.Config) error {
 var pngMagicNumber = []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
 var pngIHDR = []byte{0x49, 0x48, 0x44, 0x52}
 
-func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
-	f := bytes.NewReader(raw)
+func parseImgPng(f *bytes.Reader, info *imgInfo, imgConfig image.Config) error {
+	// f := bytes.NewReader(raw)
 	f.Seek(0, 0)
 	b, err := readBytes(f, 8)
 	if err != nil {
 		return err
 	}
-	if !compareBytes(b, pngMagicNumber) {
+	if !bytes.Equal(b, pngMagicNumber) {
 		return errors.New("Not a PNG file")
 	}
 
-	f.Seek(4, 1) //skip header chunk
+	f.Seek(4, 1) // skip header chunk
 	b, err = readBytes(f, 4)
 	if err != nil {
 		return err
 	}
-	if !compareBytes(b, pngIHDR) {
+	if !bytes.Equal(b, pngIHDR) {
 		return errors.New("Incorrect PNG file")
 	}
 
@@ -152,7 +158,7 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 	if err != nil {
 		return err
 	}
-	//fmt.Printf("w=%d h=%d\n", w, h)
+	// fmt.Printf("w=%d h=%d\n", w, h)
 
 	bpc, err := readBytes(f, 1)
 	if err != nil {
@@ -169,13 +175,14 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 	}
 
 	var colspace string
-	if ct[0] == 0 || ct[0] == 4 {
+	switch ct[0] {
+	case 0, 4:
 		colspace = "DeviceGray"
-	} else if ct[0] == 2 || ct[0] == 6 {
+	case 2, 6:
 		colspace = "DeviceRGB"
-	} else if ct[0] == 3 {
+	case 3:
 		colspace = "Indexed"
-	} else {
+	default:
 		return errors.New("Unknown color type")
 	}
 
@@ -203,26 +210,24 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 		return errors.New("Interlacing not supported")
 	}
 
-	_, err = f.Seek(4, 1) //skip
+	_, err = f.Seek(4, 1) // skip
 	if err != nil {
 		return err
 	}
 
-	//decodeParms := "/Predictor 15 /Colors '.($colspace=='DeviceRGB' ? 3 : 1).' /BitsPerComponent '.$bpc.' /Columns '.$w;
+	// decodeParms := "/Predictor 15 /Colors '.($colspace=='DeviceRGB' ? 3 : 1).' /BitsPerComponent '.$bpc.' /Columns '.$w;
 
 	var pal []byte
 	var trns []byte
 	var data []byte
 	for {
-		// Fix error when png not embed profile
-		// https://github.com/signintech/gopdf/commit/1b7ea99017dbed0067d9c1c063968c50bc968ad8
 		un, err := readUInt(f)
 		if err != nil {
 			return err
 		}
 		n := int(un)
 		typ, err := readBytes(f, 4)
-		//fmt.Printf(">>>>>%s\n", string(typ))
+		// fmt.Printf(">>>>%+v-%s-%d\n", typ, string(typ), n)
 		if err != nil {
 			return err
 		}
@@ -232,7 +237,7 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 			if err != nil {
 				return err
 			}
-			_, err = f.Seek(int64(4), 1) //skip
+			_, err = f.Seek(int64(4), 1) // skip
 			if err != nil {
 				return err
 			}
@@ -255,27 +260,27 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 				}
 			}
 
-			_, err = f.Seek(int64(4), 1) //skip
+			_, err = f.Seek(int64(4), 1) // skip
 			if err != nil {
 				return err
 			}
 
 		} else if string(typ) == "IDAT" {
-			//fmt.Printf("n=%d\n\n", n)
+			// fmt.Printf("n=%d\n\n", n)
 			var d []byte
 			d, err = readBytes(f, n)
 			if err != nil {
 				return err
 			}
 			data = append(data, d...)
-			_, err = f.Seek(int64(4), 1) //skip
+			_, err = f.Seek(int64(4), 1) // skip
 			if err != nil {
 				return err
 			}
 		} else if string(typ) == "IEND" {
 			break
 		} else {
-			_, err = f.Seek(int64(n+4), 1) //skip
+			_, err = f.Seek(int64(n+4), 1) // skip
 			if err != nil {
 				return err
 			}
@@ -284,13 +289,13 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 		if n <= 0 {
 			break
 		}
-	} //end for
+	} // end for
 
-	//info.data = data //ok
+	// info.data = data //ok
 	info.trns = trns
 	info.pal = pal
 
-	//fmt.Printf("data= %x", md5.Sum(data))
+	// fmt.Printf("data= %x", md5.Sum(data))
 
 	if colspace == "Indexed" && strings.TrimSpace(string(pal)) == "" {
 		return errors.New("Missing palette")
@@ -308,8 +313,8 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 	}
 	info.decodeParms = fmt.Sprintf("/Predictor 15 /Colors  %d /BitsPerComponent %s /Columns %d", colors, info.bitsPerComponent, w)
 
-	//fmt.Printf("%d = ct[0]\n", ct[0])
-	//fmt.Printf("%x\n", md5.Sum(data))
+	// fmt.Printf("%d = ct[0]\n", ct[0])
+	// fmt.Printf("%x\n", md5.Sum(data))
 	if ct[0] >= 4 {
 		zipReader, err := zlib.NewReader(bytes.NewReader(data))
 		if err != nil {
@@ -342,7 +347,7 @@ func paesePng(raw []byte, info *imgInfo, imgConfig image.Config) error {
 				}
 				i++
 			}
-			//fmt.Print("aaaaa")
+			// fmt.Print("aaaaa")
 
 		} else {
 			// RGB image

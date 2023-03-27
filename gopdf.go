@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -52,6 +53,20 @@ type GoPdf struct {
 	//info
 	isUseInfo bool
 	info      *PdfInfo
+
+	Log func(msg string, args ...interface{})
+}
+
+func (gp *GoPdf) PrintMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	gp.Log("Memstats {Alloc: %v, Sys: %v, Retained: %v, NumGC: %3d}", bToMb(int(m.Alloc)), bToMb(int(m.Sys)), bToMb(int(m.HeapIdle-m.HeapReleased)), m.NumGC)
+}
+
+func bToMb(b int) string {
+	mb := float32(b) / 1024 / 1024
+	return fmt.Sprintf("%8.3f MB", mb)
 }
 
 //SetLineWidth : set line width
@@ -398,6 +413,10 @@ func (gp *GoPdf) AddPage() {
 func (gp *GoPdf) Start(config Config) {
 
 	gp.config = config
+	gp.Log = config.LogFunc
+	if gp.Log == nil {
+		gp.Log = log.Printf
+	}
 	gp.init()
 	//สร้าง obj พื้นฐาน
 	catalog := new(CatalogObj)
@@ -475,6 +494,7 @@ func (gp *GoPdf) Close() error {
 }
 
 func (gp *GoPdf) compilePdf() error {
+	gp.Log("Start to compile pdf")
 	gp.prepare()
 	err := gp.Close()
 	if err != nil {
@@ -496,7 +516,9 @@ func (gp *GoPdf) compilePdf() error {
 		buffbyte := pdfObj.getObjBuff().Bytes()
 		gp.buf.Write(buffbyte)
 		gp.buf.WriteString("endobj\n\n")
+		gp.pdfObjs[i] = &emptyObj{}
 		i++
+		gp.PrintMemUsage()
 	}
 	gp.xref(linelens, &gp.buf, &i)
 	return nil
@@ -510,6 +532,68 @@ func (gp *GoPdf) GetBytesPdfReturnErr() ([]byte, error) {
 	}
 	err = gp.compilePdf()
 	return gp.buf.Bytes(), err
+}
+
+func (gp *GoPdf) WriteTo(writer io.Writer) (int64, error) {
+	var err error
+	var size int64
+	var step int
+	gp.Log("Start to compile pdf")
+	gp.prepare()
+
+	if err = gp.Close(); err != nil {
+		return size, err
+	}
+
+	max := len(gp.pdfObjs)
+	step, err = writer.Write([]byte("%PDF-1.7\n\n"))
+	if err != nil {
+		return size, err
+	} else {
+		size += int64(step)
+	}
+	linelens := make([]int, max)
+	i := 0
+	for i < max {
+		objID := i + 1
+		linelens[i] = int(size)
+		pdfObj := gp.pdfObjs[i]
+		err = pdfObj.build(objID)
+		if err != nil {
+			return size, err
+		}
+		step, err = writer.Write([]byte(strconv.Itoa(objID) + " 0 obj\n"))
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		step, err = writer.Write(pdfObj.getObjBuff().Bytes())
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		step, err = writer.Write([]byte("endobj\n\n"))
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		gp.pdfObjs[i] = &emptyObj{}
+		i++
+		gp.PrintMemUsage()
+	}
+
+	buff := bytes.Buffer{}
+	gp.xrefAlt(linelens, &buff, int(size), &i)
+	step, err = writer.Write(buff.Bytes())
+	if err != nil {
+		return size, err
+	} else {
+		size += int64(step)
+	}
+	return size, nil
 }
 
 //GetBytesPdf : get bytes of pdf file
@@ -864,6 +948,36 @@ func (gp *GoPdf) xref(linelens []int, buff *bytes.Buffer, i *int) error {
 	(*i)++
 
 	return nil
+}
+
+func (gp *GoPdf) xrefAlt(linelens []int, buff *bytes.Buffer, xrefbyteoffset int, i *int) {
+	buff.WriteString("xref\n")
+	buff.WriteString("0 " + strconv.Itoa((*i)+1) + "\n")
+	buff.WriteString("0000000000 65535 f \n")
+	j := 0
+	max := len(linelens)
+	for j < max {
+		linelen := linelens[j]
+		buff.WriteString(gp.formatXrefline(linelen) + " 00000 n \n")
+		j++
+	}
+	buff.WriteString("trailer\n")
+	buff.WriteString("<<\n")
+	buff.WriteString("/Size " + strconv.Itoa(max+1) + "\n")
+	buff.WriteString("/Root 1 0 R\n")
+	if gp.isUseProtection() {
+		buff.WriteString(fmt.Sprintf("/Encrypt %d 0 R\n", gp.encryptionObjID))
+		buff.WriteString("/ID [()()]\n")
+	}
+	if gp.isUseInfo {
+		gp.bindInfo(buff)
+	}
+	buff.WriteString(">>\n")
+	buff.WriteString("startxref\n")
+	buff.WriteString(strconv.Itoa(xrefbyteoffset))
+	buff.WriteString("\n%%EOF\n")
+
+	(*i)++
 }
 
 func (gp *GoPdf) bindInfo(buff *bytes.Buffer) {
