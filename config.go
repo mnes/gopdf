@@ -7,6 +7,7 @@ type Config struct {
 	PageSize   Rect
 	K          float64
 	Protection PDFProtectionConfig
+	LogFunc    func(msg string, args ...interface{})
 }
 
 //PDFProtectionConfig config of pdf protection

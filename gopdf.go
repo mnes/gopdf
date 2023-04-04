@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -217,6 +218,9 @@ func (gp *GoPdf) Image(picPath string, x float64, y float64, rect *Rect) error {
 			if err != nil {
 				return err
 			}
+			dRGB.getRoot = func() *GoPdf {
+				return gp
+			}
 			imgobj.imginfo.deviceRGBObjID = gp.addObj(dRGB)
 		}
 
@@ -286,7 +290,88 @@ func (gp *GoPdf) ImageByReader(o string, r io.Reader, x float64, y float64, rect
 			if err != nil {
 				return err
 			}
+			dRGB.getRoot = func() *GoPdf {
+				return gp
+			}
 			imgobj.imginfo.deviceRGBObjID = gp.addObj(dRGB)
+		}
+
+	} else { //same img
+		gp.getContent().AppendStreamImage(cacheImageIndex, x, y, rect)
+	}
+	return nil
+}
+
+func (gp *GoPdf) ImageByReaderFunc(o string, funcGetReader func() (io.Reader, error), x float64, y float64, rect *Rect) error {
+
+	//check
+	cacheImageIndex := -1
+	for _, imgcache := range gp.curr.ImgCaches {
+		if o == imgcache.Path {
+			cacheImageIndex = imgcache.Index
+			break
+		}
+	}
+
+	//create img object
+	readerObj := new(ImageReaderObj)
+	readerObj.init(func() *GoPdf {
+		return gp
+	})
+	readerObj.setProtection(gp.protection())
+	readerObj.setImageReader(funcGetReader)
+
+	imgobj := new(ImageObj)
+	imgobj.setProtection(gp.protection())
+
+	reader, err := funcGetReader()
+	if err != nil {
+		return err
+	}
+	if err := imgobj.SetImage(reader); err != nil {
+		return err
+	}
+
+	if rect == nil {
+		rect = imgobj.GetRect()
+	}
+
+	if cacheImageIndex == -1 { //new image
+		err := imgobj.parse()
+		if err != nil {
+			return err
+		}
+		index := gp.addObj(readerObj)
+		if gp.indexOfProcSet != -1 {
+			//ยัดรูป
+			procset := gp.pdfObjs[gp.indexOfProcSet].(*ProcSetObj)
+			gp.getContent().AppendStreamImage(gp.curr.CountOfImg, x, y, rect)
+			procset.RealteXobjs = append(procset.RealteXobjs, RealteXobject{IndexOfObj: index})
+			//เก็บข้อมูลรูปเอาไว้
+			var imgcache ImageCache
+			imgcache.Index = gp.curr.CountOfImg
+			imgcache.Path = o
+			gp.curr.ImgCaches = append(gp.curr.ImgCaches, imgcache)
+			gp.curr.CountOfImg++
+		}
+
+		if imgobj.haveSMask() {
+			smaskObj, err := imgobj.createSMask()
+			if err != nil {
+				return err
+			}
+			readerObj.smarkObjID = gp.addObj(smaskObj)
+		}
+
+		if imgobj.isColspaceIndexed() {
+			dRGB, err := imgobj.createDeviceRGB()
+			if err != nil {
+				return err
+			}
+			dRGB.getRoot = func() *GoPdf {
+				return gp
+			}
+			readerObj.deviceRGBObjID = gp.addObj(dRGB)
 		}
 
 	} else { //same img
@@ -394,6 +479,7 @@ func (gp *GoPdf) Close() error {
 }
 
 func (gp *GoPdf) compilePdf() error {
+	gp.Debugf("Start to compile pdf")
 	gp.prepare()
 	err := gp.Close()
 	if err != nil {
@@ -416,6 +502,8 @@ func (gp *GoPdf) compilePdf() error {
 		gp.buf.Write(buffbyte)
 		gp.buf.WriteString("endobj\n\n")
 		i++
+		gp.pdfObjs[i] = &emptyObj{}
+		gp.printMemStats(fmt.Sprintf("compilePdf{id: %v; type: %T}", objID, pdfObj))
 	}
 	gp.xref(linelens, &gp.buf, &i)
 	return nil
@@ -429,6 +517,68 @@ func (gp *GoPdf) GetBytesPdfReturnErr() ([]byte, error) {
 	}
 	err = gp.compilePdf()
 	return gp.buf.Bytes(), err
+}
+
+func (gp *GoPdf) WriteTo(writer io.Writer) (int64, error) {
+	var err error
+	var size int64
+	var step int
+	gp.Debugf("Start to compile & write pdf")
+	gp.prepare()
+
+	if err = gp.Close(); err != nil {
+		return size, err
+	}
+
+	max := len(gp.pdfObjs)
+	step, err = writer.Write([]byte("%PDF-1.7\n\n"))
+	if err != nil {
+		return size, err
+	} else {
+		size += int64(step)
+	}
+	linelens := make([]int, max)
+	i := 0
+	for i < max {
+		objID := i + 1
+		linelens[i] = int(size)
+		pdfObj := gp.pdfObjs[i]
+		err = pdfObj.build(objID)
+		if err != nil {
+			return size, err
+		}
+		step, err = writer.Write([]byte(strconv.Itoa(objID) + " 0 obj\n"))
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		step, err = writer.Write(pdfObj.getObjBuff().Bytes())
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		step, err = writer.Write([]byte("endobj\n\n"))
+		if err != nil {
+			return size, err
+		} else {
+			size += int64(step)
+		}
+		i++
+		gp.pdfObjs[i] = &emptyObj{}
+		gp.printMemStats(fmt.Sprintf("WriteTo{id: %v; type: %T}", objID, pdfObj))
+	}
+
+	buff := bytes.Buffer{}
+	gp.xrefAlt(linelens, &buff, int(size), &i)
+	step, err = writer.Write(buff.Bytes())
+	if err != nil {
+		return size, err
+	} else {
+		size += int64(step)
+	}
+	return size, nil
 }
 
 //GetBytesPdf : get bytes of pdf file
@@ -785,6 +935,36 @@ func (gp *GoPdf) xref(linelens []int, buff *bytes.Buffer, i *int) error {
 	return nil
 }
 
+func (gp *GoPdf) xrefAlt(linelens []int, buff *bytes.Buffer, xrefbyteoffset int, i *int) {
+	buff.WriteString("xref\n")
+	buff.WriteString("0 " + strconv.Itoa((*i)+1) + "\n")
+	buff.WriteString("0000000000 65535 f \n")
+	j := 0
+	max := len(linelens)
+	for j < max {
+		linelen := linelens[j]
+		buff.WriteString(gp.formatXrefline(linelen) + " 00000 n \n")
+		j++
+	}
+	buff.WriteString("trailer\n")
+	buff.WriteString("<<\n")
+	buff.WriteString("/Size " + strconv.Itoa(max+1) + "\n")
+	buff.WriteString("/Root 1 0 R\n")
+	if gp.isUseProtection() {
+		buff.WriteString(fmt.Sprintf("/Encrypt %d 0 R\n", gp.encryptionObjID))
+		buff.WriteString("/ID [()()]\n")
+	}
+	if gp.isUseInfo {
+		gp.bindInfo(buff)
+	}
+	buff.WriteString(">>\n")
+	buff.WriteString("startxref\n")
+	buff.WriteString(strconv.Itoa(xrefbyteoffset))
+	buff.WriteString("\n%%EOF\n")
+
+	(*i)++
+}
+
 func (gp *GoPdf) bindInfo(buff *bytes.Buffer) {
 	var zerotime time.Time
 	buff.WriteString("/Info <<\n")
@@ -860,4 +1040,22 @@ func encodeUtf8(str string) string {
 func infodate(t time.Time) string {
 	ft := t.Format("20060102150405-07'00'")
 	return ft
+}
+
+func (gp *GoPdf) Debugf(msg string, args ...interface{}) {
+	if gp.config.LogFunc != nil {
+		gp.config.LogFunc(msg, args...)
+	}
+}
+
+func (gp *GoPdf) printMemStats(step string) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	gp.Debugf("[GoPdf][%30s]\n\t Memstats {Alloc: %v, Sys: %v, NumGC: %3d}", step, bToMb(int(m.Alloc)), bToMb(int(m.Sys)), m.NumGC)
+}
+
+func bToMb(b int) string {
+	mb := float32(b) / 1024 / 1024
+	return fmt.Sprintf("%8.3f MB", mb)
 }
