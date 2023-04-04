@@ -501,8 +501,8 @@ func (gp *GoPdf) compilePdf() error {
 		buffbyte := pdfObj.getObjBuff().Bytes()
 		gp.buf.Write(buffbyte)
 		gp.buf.WriteString("endobj\n\n")
-		i++
 		gp.pdfObjs[i] = &emptyObj{}
+		i++
 		gp.printMemStats(fmt.Sprintf("compilePdf{id: %v; type: %T}", objID, pdfObj))
 	}
 	gp.xref(linelens, &gp.buf, &i)
@@ -565,8 +565,8 @@ func (gp *GoPdf) WriteTo(writer io.Writer) (int64, error) {
 		} else {
 			size += int64(step)
 		}
-		i++
 		gp.pdfObjs[i] = &emptyObj{}
+		i++
 		gp.printMemStats(fmt.Sprintf("WriteTo{id: %v; type: %T}", objID, pdfObj))
 	}
 
