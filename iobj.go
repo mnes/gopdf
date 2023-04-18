@@ -12,3 +12,18 @@ type IObj interface {
 	//สร้าง ข้อมูลใน pdf
 	build(objID int) error
 }
+
+type emptyObj struct {
+}
+
+func (obj emptyObj) init(func() *GoPdf) {
+}
+func (obj emptyObj) getType() string {
+	return ""
+}
+func (obj emptyObj) getObjBuff() *bytes.Buffer {
+	return nil
+}
+func (obj emptyObj) build(objID int) error {
+	return nil
+}
