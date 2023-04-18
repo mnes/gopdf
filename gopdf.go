@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"runtime"
 	"strconv"
 	"time"
 )
@@ -479,7 +478,6 @@ func (gp *GoPdf) Close() error {
 }
 
 func (gp *GoPdf) compilePdf() error {
-	gp.Debugf("Start to compile pdf")
 	gp.prepare()
 	err := gp.Close()
 	if err != nil {
@@ -503,7 +501,6 @@ func (gp *GoPdf) compilePdf() error {
 		gp.buf.WriteString("endobj\n\n")
 		gp.pdfObjs[i] = &emptyObj{}
 		i++
-		gp.printMemStats(fmt.Sprintf("compilePdf{id: %v; type: %T}", objID, pdfObj))
 	}
 	gp.xref(linelens, &gp.buf, &i)
 	return nil
@@ -523,7 +520,6 @@ func (gp *GoPdf) WriteTo(writer io.Writer) (int64, error) {
 	var err error
 	var size int64
 	var step int
-	gp.Debugf("Start to compile & write pdf")
 	gp.prepare()
 
 	if err = gp.Close(); err != nil {
@@ -567,7 +563,6 @@ func (gp *GoPdf) WriteTo(writer io.Writer) (int64, error) {
 		}
 		gp.pdfObjs[i] = &emptyObj{}
 		i++
-		gp.printMemStats(fmt.Sprintf("WriteTo{id: %v; type: %T}", objID, pdfObj))
 	}
 
 	buff := bytes.Buffer{}
@@ -1040,22 +1035,4 @@ func encodeUtf8(str string) string {
 func infodate(t time.Time) string {
 	ft := t.Format("20060102150405-07'00'")
 	return ft
-}
-
-func (gp *GoPdf) Debugf(msg string, args ...interface{}) {
-	if gp.config.LogFunc != nil {
-		gp.config.LogFunc(msg, args...)
-	}
-}
-
-func (gp *GoPdf) printMemStats(step string) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	gp.Debugf("[GoPdf][%30s]\n\t Memstats {Alloc: %v, Sys: %v, NumGC: %3d}", step, bToMb(int(m.Alloc)), bToMb(int(m.Sys)), m.NumGC)
-}
-
-func bToMb(b int) string {
-	mb := float32(b) / 1024 / 1024
-	return fmt.Sprintf("%8.3f MB", mb)
 }
